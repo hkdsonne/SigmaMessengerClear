@@ -1,0 +1,112 @@
+# docker-compose.yml
+# Версия формата докеркомпоуза. 3.8 - стабильная
+#
+# Блок services - описание всех контейнеров
+services:
+  # React. Соберет статику и завершиться. За отдачу этой статики будет отвечать nginx
+  react-builder:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      # Переменные окружения
+      args:
+        - VITE_CHATS_SERVICE_IP=${VITE_CHATS_SERVICE_IP}
+        - VITE_AUTH_SERVICE_IP=${VITE_AUTH_SERVICE_IP}
+        - VITE_SOCIAL_SERVICE_IP=${VITE_SOCIAL_SERVICE_IP}
+        - VITE_USER_SERVICE_IP=${VITE_USER_SERVICE_IP}
+        - VITE_MAIL_SERVICE_IP=${VITE_MAIL_SERVICE_IP}
+        - VITE_FILE_SERVICE_IP=${VITE_FILE_SERVICE_IP}
+    image: react-static-builder:1.0
+    container_name: react-builder
+    # Смонтировать volume в /output для копирования статики
+    volumes:
+      - react-static:/output
+    # Не перезагружать контейнер после завершения - он уже не нужен
+    restart: "no"
+  #
+  #
+  nginx:
+    # Блок build - как собирать образ
+    build:
+      # Путь к докерфайлу
+      context: ./nginx
+      # Имя докерфайла
+      dockerfile: Dockerfile
+      # Можно передать аргументы сборки по типу версии образа
+      #args:
+        #- NGINX_VERSION=1.21-alpine
+    #
+    # Имя создаваемое при сборке образа
+    image: mess/nginx_to_mess_image:1.0
+    # Имя создаваемого при сборке контейнера
+    container_name: nginx_to_mess_container
+    #
+    # Блок с пробросом портов в контейнер
+    # Первое - порт хоста, второе - порт внутри контейнера
+    ports:
+      # HTTP -- Анализатор будет транслировать вовне 80. А анализатор будет подключаться к фронту по 5172
+      #- "5172:5173"
+      - "80:5173"
+      # HTTPS - Пока что не используем
+      - "443:443"
+    # 
+    # Можно смонтировать папки с хоста в контейнер
+    # Уже сделал это в самом докерфайле
+    #volumes:
+      #- ./nginx/conf.d:/etc/nginx/conf.d:ro #ro - read only
+    #
+    # Переменные окрежения для конейнера
+    environment:
+      # Максимальное количество ядер nginx из общего .env
+      - NGINX_MAX_CPU=${NGINX_MAX_CPU:-4}
+      # Явная передача
+      - NGINX_HOST=${NGINX_HOST:-localhost}
+      - NGINX_PORT=${NGINX_PORT:-5173}
+    #
+    # Указание от каких контейнеров зависит nginx - чей запуск ожидать 
+    # перед собственным
+    depends_on:
+      - react-builder
+    #
+    # Какие сети докеркомпоуза использует контейнер
+    networks:
+      - frontend
+    #
+    # Указание места хранения логов. Докер сам создаст volume на хосте
+    volumes:
+      - nginx-logs:/var/log/nginx
+      # Статика реакта
+      - react-static:/usr/share/nginx/html:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    #
+    # Политика перезагрузки
+    # Всегда перезапускать, кроме явной остановки
+    restart: unless-stopped
+#
+# Описание volumes 
+volumes:
+  # Статика реакта
+  react-static:
+    name: react-static-volume
+  #
+  # Логи nginx
+  nginx-logs:
+    name: nginx-logs-volume
+#
+# Описание сетей
+networks:
+  frontend:
+    # bridge - закрытая сеть на одном хосте. Внутри сети компоуза каждый 
+    #   сервис будет иметь свой ip
+    # host - без сетевой изоляции. Будет занимать порт адреса хоста
+    # overlay - соединяет несколько хостов с Docker между собой
+    # macvlan - каждый контейнер будет иметь свой мак адрес, будет как 
+    #   отдельный сетевой адаптер в ОС хоста
+    # ipvlan - аналог macvlan, только все контейнеры будут иметь общий мак
+    # none - полностью отключить сеть для контейнера
+    driver: bridge
+    #
+    # Опционально - параметры сети
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
